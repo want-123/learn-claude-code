@@ -48,7 +48,7 @@ def run_bash(command: str, tool_name: str) -> str:
 
 def agent_loop(messages: List):
     client = OpenAiClient(
-        api="",
+        api="sk-1f7bfcabb7874aa48813eddef5b3044c",
         baseUrl="https://dashscope.aliyuncs.com/compatible-mode/v1",
         model="qwen3.5-flash"
     )
