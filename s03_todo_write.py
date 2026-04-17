@@ -59,18 +59,25 @@ class ToDoManager:
         lines.append(f"\n({done}/{len(self.items)} completed)")
         return "\n".join(lines)
 
-# 路径沙箱
 def safe_path(p: str) -> Path:
     path = (WORKPATH / p).resolve()
     if not path.is_relative_to(WORKPATH):
         raise ValueError(f"不在路径沙箱之内")
     return path
+
 def run_read(path: str, limit: int = None) -> str:
-    text = safe_path(path).read_text()
-    lines = text.splitlines()
-    if limit and limit < len(lines):
-        lines = lines[:limit] + [f"..({len(lines) - limit} more lines)"]
-    return "\n".join(lines)[:50000]
+    try:
+        fp = safe_path(path)
+        if not fp.is_file():
+            return f"Error: {path} 不是文件"
+        text = fp.read_text()
+        lines = text.splitlines()
+        if limit and limit < len(lines):
+            lines = lines[:limit] + [f"..({len(lines)-limit} more lines)"]
+        return "\n".join(lines)[:50000]
+    except Exception as e:
+        return f"Error reading: {str(e)}"
+
 def run_write(path: str, content: str) -> str:
     try:
         fp = safe_path(path)
@@ -79,6 +86,7 @@ def run_write(path: str, content: str) -> str:
         return f"写了{len(content)} bytes 到 {path}"
     except Exception as e:
         return f"Error : {e}"
+
 def run_edit(path: str, old_text: str, new_text: str) -> str:
     try:
         fp = safe_path(path)
@@ -89,6 +97,7 @@ def run_edit(path: str, old_text: str, new_text: str) -> str:
         return f"完成修改 {path}"
     except Exception as e:
         return f"Exception {e}"
+
 def run_bash(command: str, tool_name: str) -> str:
     if tool_name != "bash":
         return "执行工具错误！"
@@ -101,15 +110,18 @@ def run_bash(command: str, tool_name: str) -> str:
             shell=True,
             cwd=os.getcwd(),
             capture_output=True,
-            text=True,
-            timeout=120
+            text=True,       # 确保文本模式
+            errors="replace",# 🔥 核心修复：编码错误自动替换
+            timeout=15
         )
-        out = (r.stdout + r.stderr).strip()
-        return out[:5000] if out else "(no output)"
+        # 🔥 安全截取，防止超长导致 PyUnicode_New 报错
+        out = (r.stdout + r.stderr)[:1000].strip()
+        return out if out else "(命令执行成功，无输出)"
     except subprocess.TimeoutExpired:
-        return "Error: Timeout (120s)"
-    except (FileNotFoundError, OSError) as e:
-        return f"Error: {e}"
+        return "Error: 执行超时 (15s)"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
 TODO = ToDoManager()
 
 TOOLS = [
@@ -188,19 +200,9 @@ TOOLS = [
               "items": {
                 "type": "object",
                 "properties": {
-                  "id": {
-                    "type": "string",
-                    "description": "Unique identifier for the task"
-                  },
-                  "text": {
-                    "type": "string",
-                    "description": "Task description or content"
-                  },
-                  "status": {
-                    "type": "string",
-                    "enum": ["pending", "in_progress", "completed"],
-                    "description": "Current progress status of the task"
-                  }
+                  "id": {"type": "string"},
+                  "text": {"type": "string"},
+                  "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}
                 },
                 "required": ["id", "text", "status"]
               }
@@ -220,7 +222,6 @@ TOOLS_HANDLERS = {
     "todo": lambda **kw: TODO.update(kw["items"]),
 }
 
-
 def agent_loop(messages: List):
     client = OpenAiClient(
         api="sk-1f7bfcabb7874aa48813eddef5b3044c",
@@ -228,64 +229,71 @@ def agent_loop(messages: List):
         model="qwen3.5-flash"
     )
 
-    # 🔥 强制规则：让AI必须自动重试失败的命令
-    # messages.insert(0, {
-    #     "role": "system",
-    #     "content": "你是一个自动执行命令的Agent。如果命令执行失败（如命令不存在、权限不足），请自动修复命令并重新调用工具执行，直到成功为止。不要直接回答！"
-    # })
-
     rounds_since_todo = 0
     while True:
         response = client.chat(messages=messages, tools=TOOLS)
         message = response.choices[0].message
         finish_reason = response.choices[0].finish_reason
 
-        # 把AI回复加入消息
         messages.append({
             "role": "assistant",
             "content": message.content or ""
         })
+        print("==================================================")
+        print("当前回复 : ", message)
+        print("==================================================")
 
-        # 结束条件：不是工具调用才结束
-        if finish_reason != "tool_calls":
+        if finish_reason != "tool_calls" and message.tool_calls is None:
             print("【最终回答】", message.content)
             return
-        results = []
+
         use_todo = False
-        # 执行工具
+        print("==================================================")
+        print("当前tools : ", message.tool_calls)
+        print("==================================================")
         for tool_call in message.tool_calls:
             tool_name = tool_call.function.name
-            tool_args = json.loads(tool_call.function.arguments)
-            handler = TOOLS_HANDLERS.get(tool_name)
+            try:
+                tool_args = json.loads(tool_call.function.arguments)
+            except:
+                tool_args = {}
 
+            handler = TOOLS_HANDLERS.get(tool_name)
             print("==================================================")
             print("执行命令：", tool_name)
-            output = handler(**tool_args) if handler else f"位置工具 {tool_name}"
+            try:
+                output = handler(** tool_args) if handler else f"未知工具 {tool_name}"
+            except Exception as e:
+                output = f"工具执行失败: {str(e)}"
             print("执行结果：", output)
             print("==================================================\n")
-            # 工具返回
-            # results.append({"type": "tool_result", "tool_use_id": tool_args.id, "content": str(output)})
+
             messages.append({
                 "role": "tool",
                 "tool_call_id": tool_call.id,
-                "content": output
+                "content": str(output)
             })
 
             if tool_name == "todo":
                 use_todo = True
+
         rounds_since_todo = 0 if use_todo else rounds_since_todo + 1
         if rounds_since_todo >= 3:
             messages.append({
                 "role": "user",
-                "content": "<reminder>Update your todos.</reminder>"
+                "content": "Please update your todos and focus on current task."
             })
-
-
+            rounds_since_todo = 0
 
 if __name__ == "__main__":
-    SYSTEM = f"你是一个coding Agent，你的的WORKPATH是{WORKPATH}，你需要利用tools解决问题，不需要解释"
-    history = []
-    history.append({"role": "system", "content": SYSTEM})
+    SYSTEM = f"""你是一个Coding Agent，工作目录：{WORKPATH}
+规则：
+1. 多任务必须先调用 todo 工具创建任务列表
+2. 只能读写文件，不能读文件夹
+3. 严格按任务顺序执行
+4. 调用 todo 后必须展示任务状态
+"""
+    history = [{"role": "system", "content": SYSTEM}]
     while True:
         try:
             query = input("\033[36ms01 >> \033[0m")
@@ -295,9 +303,4 @@ if __name__ == "__main__":
             break
         history.append({"role": "user", "content": query})
         agent_loop(history)
-        response_content = history[-1]["content"]
-        if isinstance(response_content, list):
-            for block in response_content:
-                if hasattr(block, "text"):
-                    print(block.text)
         print()
