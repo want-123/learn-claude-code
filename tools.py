@@ -3,6 +3,8 @@ import os
 import subprocess
 from pathlib import Path
 from typing import List
+
+from skill_loader import SKILLSLOADER
 from util import OpenAiClient
 WORKPATH = Path.cwd()
 
@@ -132,7 +134,7 @@ def run_subagent(prompt: str) -> str:
         baseUrl="https://dashscope.aliyuncs.com/compatible-mode/v1",
         model="qwen3.5-flash"
     )
-    submessages = [{"role": "assistant", "content": f"You are a coding subagent at {WORKPATH}. Complete the given task, then summarize your findings."},
+    submessages = [{"role": "assistant", "content": f"You are a coding subagent at {WORKPATH}. Complete the given task, then summarize your findings. Skills available:{SKILLSLOADER.get_descriptions()}"},
                    {"role": "user", "content": prompt}]
     rounds_since_todo = 0
     for _ in range(30):
@@ -286,6 +288,23 @@ CHILD_TOOLS = [
           "required": ["items"]
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "load_skill",
+        "description": "Load specialized knowledge by name.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Skill name to load"
+            }
+          },
+          "required": ["name"]
+        }
+      }
     }
 ]
 
@@ -321,5 +340,6 @@ TOOLS_HANDLERS = {
     "run_write": lambda **kw: run_write(kw["path"], kw["content"]),
     "run_edit": lambda **kw: run_edit(kw["path"], kw["old_text"], kw["new_text"]),
     "todo": lambda **kw: TODO.update(kw["items"]),
-    "run_subagent": lambda **kw: run_subagent(kw["prompt"])
+    "run_subagent": lambda **kw: run_subagent(kw["prompt"]),
+    "load_skill": lambda **kw: SKILLSLOADER.get_content(kw["name"])
 }
