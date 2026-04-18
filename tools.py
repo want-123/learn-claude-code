@@ -6,7 +6,9 @@ from typing import List
 
 from skill_loader import SKILLSLOADER
 from util import OpenAiClient
+
 WORKPATH = Path.cwd()
+
 
 class ToDoManager:
     def __init__(self, items: list = None):
@@ -59,14 +61,31 @@ class ToDoManager:
 
         lines.append(f"\n({done}/{len(self.items)} completed)")
         return "\n".join(lines)
+
+
 """
 基础tools
 """
+
+
+def run_glob(pattern: str) -> str:
+    """查找匹配模式的文件"""
+    import glob
+    try:
+        files = glob.glob(pattern, recursive=True)
+        if not files:
+            return f"没有找到匹配 '{pattern}' 的文件"
+        return f"找到 {len(files)} 个文件:\n" + "\n".join(files[:200])
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
 def safe_path(p: str) -> Path:
     path = (WORKPATH / p).resolve()
     if not path.is_relative_to(WORKPATH):
         raise ValueError(f"不在路径沙箱之内")
     return path
+
 
 def run_read(path: str, limit: int = None) -> str:
     try:
@@ -76,10 +95,13 @@ def run_read(path: str, limit: int = None) -> str:
         text = fp.read_text(encoding="utf-8", errors="replace")
         lines = text.splitlines()
         if limit and limit < len(lines):
-            lines = lines[:limit] + [f"..({len(lines)-limit} more lines)"]
+            lines = lines[:limit] + [f"..({len(lines) - limit} more lines)"]
+        if lines is None or len(lines) == 0:
+            lines = ["该文件无内容"]
         return "\n".join(lines)[:50000]
     except Exception as e:
         return f"Error reading: {str(e)}"
+
 
 def run_write(path: str, content: str) -> str:
     try:
@@ -89,6 +111,7 @@ def run_write(path: str, content: str) -> str:
         return f"写了{len(content)} bytes 到 {path}"
     except Exception as e:
         return f"Error : {e}"
+
 
 def run_edit(path: str, old_text: str, new_text: str) -> str:
     try:
@@ -100,6 +123,7 @@ def run_edit(path: str, old_text: str, new_text: str) -> str:
         return f"完成修改 {path}"
     except Exception as e:
         return f"Exception {e}"
+
 
 def run_bash(command: str, tool_name: str) -> str:
     if tool_name != "bash":
@@ -113,28 +137,32 @@ def run_bash(command: str, tool_name: str) -> str:
             shell=True,
             cwd=os.getcwd(),
             capture_output=True,
-            text=True,       # 确保文本模式
-            errors="replace",# 🔥 核心修复：编码错误自动替换
+            text=True,  # 确保文本模式
+            errors="replace",  # 🔥 核心修复：编码错误自动替换
             timeout=15
         )
         # 🔥 安全截取，防止超长导致 PyUnicode_New 报错
-        out = (r.stdout + r.stderr)[:1000].strip()
+        out = (r.stdout + r.stderr)[:50000].strip()
         return out if out else "(命令执行成功，无输出)"
     except subprocess.TimeoutExpired:
         return "Error: 执行超时 (15s)"
     except Exception as e:
         return f"Error: {str(e)}"
 
+
 """"
 子agent tool
 """
+
+
 def run_subagent(prompt: str) -> str:
     client = OpenAiClient(
         api="sk-1f7bfcabb7874aa48813eddef5b3044c",
         baseUrl="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        model="qwen3.5-flash"
+        model="qwen3.6-plus"
     )
-    submessages = [{"role": "assistant", "content": f"You are a coding subagent at {WORKPATH}. Complete the given task, then summarize your findings. Skills available:{SKILLSLOADER.get_descriptions()}"},
+    submessages = [{"role": "assistant",
+                    "content": f"You are a coding subagent at {WORKPATH}. Complete the given task, then summarize your findings. Skills available:{SKILLSLOADER.get_descriptions()}"},
                    {"role": "user", "content": prompt}]
     rounds_since_todo = 0
     for _ in range(30):
@@ -196,7 +224,6 @@ def run_subagent(prompt: str) -> str:
     print("subagent sunmmary", summary)
     print("==================================================\n")
     return summary
-
 
 
 TODO = ToDoManager()
@@ -264,73 +291,107 @@ CHILD_TOOLS = [
         }
     },
     {
-      "type": "function",
-      "function": {
-        "name": "todo",
-        "description": "Update task list. Track progress on multi-step tasks.",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "items": {
-              "type": "array",
-              "description": "List of task items to update or track",
-              "items": {
+        "type": "function",
+        "function": {
+            "name": "todo",
+            "description": "Update task list. Track progress on multi-step tasks.",
+            "parameters": {
                 "type": "object",
                 "properties": {
-                  "id": {"type": "string"},
-                  "text": {"type": "string"},
-                  "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}
+                    "items": {
+                        "type": "array",
+                        "description": "List of task items to update or track",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "text": {"type": "string"},
+                                "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}
+                            },
+                            "required": ["id", "text", "status"]
+                        }
+                    }
                 },
-                "required": ["id", "text", "status"]
-              }
+                "required": ["items"]
             }
-          },
-          "required": ["items"]
         }
-      }
     },
     {
-      "type": "function",
-      "function": {
-        "name": "load_skill",
-        "description": "Load specialized knowledge by name.",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "name": {
-              "type": "string",
-              "description": "Skill name to load"
+        "type": "function",
+        "function": {
+            "name": "load_skill",
+            "description": "Load specialized knowledge by name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Skill name to load"
+                    }
+                },
+                "required": ["name"]
             }
-          },
-          "required": ["name"]
         }
-      }
-    }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "compact",
+            "description": "Trigger manual conversation compression.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "focus": {
+                        "type": "string",
+                        "description": "What to preserve in the summary"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_glob",
+            "description": "使用glob模式查找文件（如 skills/**/*.py）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "glob模式，支持 ** 递归匹配，如 skills/**/*.py"
+                    }
+                },
+                "required": ["pattern"]
+            }
+        }
+    },
 ]
 
 PARENT_TOOLS = CHILD_TOOLS + [
     {
-      "type": "function",
-      "function": {
-        "name": "run_subagent",
-        "description": "Spawn a subagent with fresh context. It shares the filesystem but not conversation history.",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "prompt": {
-              "type": "string",
-              "description": "The main instruction/prompt for the subagent to execute"
-            },
-            "description": {
-              "type": "string",
-              "description": "Short description of the task"
+        "type": "function",
+        "function": {
+            "name": "run_subagent",
+            "description": "Spawn a subagent with fresh context. It shares the filesystem but not conversation history.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "The main instruction/prompt for the subagent to execute"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Short description of the task"
+                    }
+                },
+                "required": [
+                    "prompt"
+                ]
             }
-          },
-          "required": [
-            "prompt"
-          ]
         }
-      }
     }
 ]
 
@@ -341,5 +402,16 @@ TOOLS_HANDLERS = {
     "run_edit": lambda **kw: run_edit(kw["path"], kw["old_text"], kw["new_text"]),
     "todo": lambda **kw: TODO.update(kw["items"]),
     "run_subagent": lambda **kw: run_subagent(kw["prompt"]),
-    "load_skill": lambda **kw: SKILLSLOADER.get_content(kw["name"])
+    "load_skill": lambda **kw: SKILLSLOADER.get_content(kw["name"]),
+    "run_glob": lambda **kw: run_glob(kw["pattern"]),
+}
+TOOLS_TASK_HANDLERS = {
+    "bash": run_bash,
+    "run_read": run_read,
+    "run_write": run_write,
+    "run_edit": run_edit,
+    "todo": TODO.update,
+    "run_subagent": run_subagent,
+    "load_skill": SKILLSLOADER.get_content,
+    "run_glob": run_glob,
 }
