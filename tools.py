@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import threading
+import uuid
 from pathlib import Path
 from typing import List
 
@@ -65,11 +66,62 @@ class ToDoManager:
         return "\n".join(lines)
 
 
-# class BackGroundManager:
-#     def __init__(self):
-#         self.task = {}
-#         self._notice_queue = []
-#         self_lock = threading.Lock()
+class BackGroundManager:
+    def __init__(self):
+        self.task = {}
+        self._notice_queue = []
+        self._lock = threading.Lock()
+
+    def run(self, command: str) -> str:
+        task_id = str(uuid.uuid4()())[:8]
+        self.task[task_id] = {"status": "running", "result": None, "command": command}
+        thread = threading.Thread(
+            target=self._execute, args=(task_id, command), daemon=True
+        )
+        thread.start()
+        return f"Background task {task_id} started: {command[:80]}"
+
+    def _execute(self, task_id: str, command: str):
+        try:
+            r = subprocess.run(
+                command, shell=True, cwd=WORKPATH,
+                capture_output=True, text=True, timeout=300
+            )
+            output = (r.stdout + r.stderr).strip()[:50000]
+            status = "completed"
+        except subprocess.TimeoutExpired:
+            output = "ERROR: Timeout (300s)"
+            status = "timeout"
+        except Exception as e:
+            output = f"Error ： {e}"
+            status = "error"
+        with self._lock:
+            self._notice_queue.append({
+                "task_id": task_id,
+                "status": status,
+                "result": (output or "no output")[:500],
+                "command": command
+            })
+
+    def check(self, task_id: str = None) -> str:
+        """Check status of one task or list all."""
+        if task_id:
+            t = self.tasks.get(task_id)
+            if not t:
+                return f"Error: Unknown task {task_id}"
+            return f"[{t['status']}] {t['command'][:60]}\n{t.get('result') or '(running)'}"
+        lines = []
+        for tid, t in self.tasks.items():
+            lines.append(f"{tid}: [{t['status']}] {t['command'][:60]}")
+        return "\n".join(lines) if lines else "No background tasks."
+
+    def drain_notifications(self) -> list:
+        """Return and clear all pending completion notifications."""
+        with self._lock:
+            notifs = list(self._notification_queue)
+            self._notification_queue.clear()
+        return notifs
+
 
 class TaskManager:
     def __init__(self, tasks_path: Path):
@@ -310,6 +362,7 @@ def run_subagent(prompt: str) -> str:
 
 # TODO = ToDoManager()
 TASKS = TaskManager(TASKS_DIR)
+BG = BackGroundManager()
 CHILD_TOOLS = [
     {
         "type": "function",
@@ -543,6 +596,41 @@ CHILD_TOOLS = [
                 ]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "background_run",
+            "description": "Run command in background thread. Returns task_id immediately.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The command to execute in the background thread"
+                    }
+                },
+                "required": [
+                    "command"
+                ]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_background",
+            "description": "Check background task status. Omit task_id to list all.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "The ID of the background task to check; omit to list all tasks"
+                    }
+                }
+            }
+        }
     }
 ]
 
@@ -585,6 +673,8 @@ TOOLS_HANDLERS = {
     "run_subagent": lambda **kw: run_subagent(kw["prompt"]),
     "load_skill": lambda **kw: SKILLSLOADER.get_content(kw["name"]),
     "run_glob": lambda **kw: run_glob(kw["pattern"]),
+    "background_run": lambda **kw: BG.run(kw["command"]),
+    "check_background": lambda **kw: BG.check(kw.get("task_id")),
 }
 TOOLS_TASK_HANDLERS = {
     "bash": run_bash,
