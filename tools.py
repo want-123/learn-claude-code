@@ -9,6 +9,7 @@ from skill_loader import SKILLSLOADER
 from util import OpenAiClient
 
 WORKPATH = Path.cwd()
+TASKS_DIR = WORKPATH / ".tasks"
 
 
 class ToDoManager:
@@ -63,6 +64,7 @@ class ToDoManager:
         lines.append(f"\n({done}/{len(self.items)} completed)")
         return "\n".join(lines)
 
+
 # class BackGroundManager:
 #     def __init__(self):
 #         self.task = {}
@@ -74,31 +76,37 @@ class TaskManager:
         self.tasks_dir = tasks_path
         self.tasks_dir.mkdir(exist_ok=True)
         self._next_id = self._max_id()
+
     def _max_id(self):
         ids = [int(f.stem.split("_")[1]) for f in self.tasks_dir.glob("task_*.json")]
         return max(ids) if ids else 0
+
     def _load(self, task_id: int) -> dict:
         path = self.tasks_dir / f"task_{task_id}.json"
         if not path.exists():
             raise ValueError(f"{path} 文件不存在")
         return json.loads(path.read_text())
+
     def save(self, tasks: dict):
         path = self.tasks_dir / f"task_{tasks['id']}.json"
         path.write_text(json.dumps(tasks, indent=2, ensure_ascii=False))
-    def create(self, subject: str, description: str="") -> str:
+
+    def create(self, subject: str, description: str = "") -> str:
         task = {"id": self._next_id, "subject": subject, "description": description,
                 "status": "pending", "blockedBy": [], "owner": ""}
         self._next_id += 1
         self.save(task)
         return json.dumps(task, indent=2, ensure_ascii=False)
+
     def get(self, task_id: int) -> str:
         return json.dumps(self._load(task_id), indent=2, ensure_ascii=False)
+
     def update(self, task_id: int, status: str = None,
-               add_blocked_by: list=None, remove_blocked_by: list=None):
+               add_blocked_by: list = None, remove_blocked_by: list = None):
         task = self._load(task_id)
 
         if status:
-            if status not in ["pending", "in_progress" , "completed"]:
+            if status not in ["pending", "in_progress", "completed"]:
                 raise ValueError(f"{status} 取值不合法")
             task["status"] = status
             if status == "completed":
@@ -135,8 +143,6 @@ class TaskManager:
             blocked = f" (blocked by: {t['blockedBy']})" if t.get("blockedBy") else ""
             lines.append(f"{marker} #{t['id']}: {t['subject']}{blocked}")
         return "\n".join(lines)
-
-
 
 
 """
@@ -302,8 +308,8 @@ def run_subagent(prompt: str) -> str:
     return summary
 
 
-TODO = ToDoManager()
-
+# TODO = ToDoManager()
+TASKS = TaskManager(TASKS_DIR)
 CHILD_TOOLS = [
     {
         "type": "function",
@@ -366,32 +372,32 @@ CHILD_TOOLS = [
             }
         }
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "todo",
-            "description": "Update task list. Track progress on multi-step tasks.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "items": {
-                        "type": "array",
-                        "description": "List of task items to update or track",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "id": {"type": "string"},
-                                "text": {"type": "string"},
-                                "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}
-                            },
-                            "required": ["id", "text", "status"]
-                        }
-                    }
-                },
-                "required": ["items"]
-            }
-        }
-    },
+    # {
+    #     "type": "function",
+    #     "function": {
+    #         "name": "todo",
+    #         "description": "Update task list. Track progress on multi-step tasks.",
+    #         "parameters": {
+    #             "type": "object",
+    #             "properties": {
+    #                 "items": {
+    #                     "type": "array",
+    #                     "description": "List of task items to update or track",
+    #                     "items": {
+    #                         "type": "object",
+    #                         "properties": {
+    #                             "id": {"type": "string"},
+    #                             "text": {"type": "string"},
+    #                             "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}
+    #                         },
+    #                         "required": ["id", "text", "status"]
+    #                     }
+    #                 }
+    #             },
+    #             "required": ["items"]
+    #         }
+    #     }
+    # },
     {
         "type": "function",
         "function": {
@@ -443,6 +449,101 @@ CHILD_TOOLS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "task_create",
+            "description": "Create a new task.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "subject": {
+                        "type": "string",
+                        "description": "Subject or title of the task"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Detailed description of the task"
+                    }
+                },
+                "required": [
+                    "subject"
+                ]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "task_update",
+            "description": "Update a task's status or dependencies.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "integer",
+                        "description": "ID of the task to update"
+                    },
+                    "status": {
+                        "type": "string",
+                        "description": "Current status of the task",
+                        "enum": [
+                            "pending",
+                            "in_progress",
+                            "completed"
+                        ]
+                    },
+                    "addBlockedBy": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer"
+                        },
+                        "description": "List of task IDs that this task should be blocked by"
+                    },
+                    "removeBlockedBy": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer"
+                        },
+                        "description": "List of task IDs to remove from blocking this task"
+                    }
+                },
+                "required": [
+                    "task_id"
+                ]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "task_list",
+            "description": "List all tasks with status summary.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "task_get",
+            "description": "Get full details of a task by ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "integer",
+                        "description": "ID of the task to retrieve"
+                    }
+                },
+                "required": [
+                    "task_id"
+                ]
+            }
+        }
+    }
 ]
 
 PARENT_TOOLS = CHILD_TOOLS + [
@@ -476,7 +577,11 @@ TOOLS_HANDLERS = {
     "run_read": lambda **kw: run_read(kw["path"], kw["limit"]),
     "run_write": lambda **kw: run_write(kw["path"], kw["content"]),
     "run_edit": lambda **kw: run_edit(kw["path"], kw["old_text"], kw["new_text"]),
-    "todo": lambda **kw: TODO.update(kw["items"]),
+    "task_create": lambda **kw: TASKS.create(kw["subject"], kw.get("description", "")),
+    "task_update": lambda **kw: TASKS.update(kw["task_id"], kw.get("status"), kw.get("addBlockedBy"),
+                                             kw.get("removeBlockedBy")),
+    "task_list": lambda **kw: TASKS.list_all(),
+    "task_get": lambda **kw: TASKS.get(kw["task_id"]),
     "run_subagent": lambda **kw: run_subagent(kw["prompt"]),
     "load_skill": lambda **kw: SKILLSLOADER.get_content(kw["name"]),
     "run_glob": lambda **kw: run_glob(kw["pattern"]),
@@ -486,7 +591,11 @@ TOOLS_TASK_HANDLERS = {
     "run_read": run_read,
     "run_write": run_write,
     "run_edit": run_edit,
-    "todo": TODO.update,
+    "task_create": lambda **kw: TASKS.create(kw["subject"], kw.get("description", "")),
+    "task_update": lambda **kw: TASKS.update(kw["task_id"], kw.get("status"), kw.get("addBlockedBy"),
+                                             kw.get("removeBlockedBy")),
+    "task_list": lambda **kw: TASKS.list_all(),
+    "task_get": lambda **kw: TASKS.get(kw["task_id"]),
     "run_subagent": run_subagent,
     "load_skill": SKILLSLOADER.get_content,
     "run_glob": run_glob,
