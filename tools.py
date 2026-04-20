@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import threading
 from pathlib import Path
 from typing import List
 
@@ -61,6 +62,81 @@ class ToDoManager:
 
         lines.append(f"\n({done}/{len(self.items)} completed)")
         return "\n".join(lines)
+
+# class BackGroundManager:
+#     def __init__(self):
+#         self.task = {}
+#         self._notice_queue = []
+#         self_lock = threading.Lock()
+
+class TaskManager:
+    def __init__(self, tasks_path: Path):
+        self.tasks_dir = tasks_path
+        self.tasks_dir.mkdir(exist_ok=True)
+        self._next_id = self._max_id()
+    def _max_id(self):
+        ids = [int(f.stem.split("_")[1]) for f in self.tasks_dir.glob("task_*.json")]
+        return max(ids) if ids else 0
+    def _load(self, task_id: int) -> dict:
+        path = self.tasks_dir / f"task_{task_id}.json"
+        if not path.exists():
+            raise ValueError(f"{path} 文件不存在")
+        return json.loads(path.read_text())
+    def save(self, tasks: dict):
+        path = self.tasks_dir / f"task_{tasks['id']}.json"
+        path.write_text(json.dumps(tasks, indent=2, ensure_ascii=False))
+    def create(self, subject: str, description: str="") -> str:
+        task = {"id": self._next_id, "subject": subject, "description": description,
+                "status": "pending", "blockedBy": [], "owner": ""}
+        self._next_id += 1
+        self.save(task)
+        return json.dumps(task, indent=2, ensure_ascii=False)
+    def get(self, task_id: int) -> str:
+        return json.dumps(self._load(task_id), indent=2, ensure_ascii=False)
+    def update(self, task_id: int, status: str = None,
+               add_blocked_by: list=None, remove_blocked_by: list=None):
+        task = self._load(task_id)
+
+        if status:
+            if status not in ["pending", "in_progress" , "completed"]:
+                raise ValueError(f"{status} 取值不合法")
+            task["status"] = status
+            if status == "completed":
+                # 清理其他依赖该任务的blocked_by
+                self._clear_dependence(task_id)
+        if add_blocked_by:
+            task["blockedBy"] = list(set(task["blockedBy"] + add_blocked_by))
+        if remove_blocked_by:
+            task["blockedBy"] = [x for x in task["blockedBy"] if x not in remove_blocked_by]
+        self.save(task)
+        return json.dumps(task, indent=2, ensure_ascii=False)
+
+    def _clear_dependence(self, task_id: int):
+        paths = self.tasks_dir.glob("task_*.json")
+        for f in paths:
+            task = json.loads(f.read_text())
+            if task_id in task.get("blockedBy", []):
+                task["blockedBy"].remove(task_id)
+            self.save(task)
+
+    def list_all(self) -> str:
+        tasks = []
+        files = sorted(
+            self.dir.glob("task_*.json"),
+            key=lambda f: int(f.stem.split("_")[1])
+        )
+        for f in files:
+            tasks.append(json.loads(f.read_text()))
+        if not tasks:
+            return "No tasks."
+        lines = []
+        for t in tasks:
+            marker = {"pending": "[ ]", "in_progress": "[>]", "completed": "[x]"}.get(t["status"], "[?]")
+            blocked = f" (blocked by: {t['blockedBy']})" if t.get("blockedBy") else ""
+            lines.append(f"{marker} #{t['id']}: {t['subject']}{blocked}")
+        return "\n".join(lines)
+
+
 
 
 """
